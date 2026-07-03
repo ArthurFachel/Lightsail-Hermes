@@ -281,7 +281,7 @@ Regras:
 - Use português brasileiro
 - Mantenha respostas concisas (máx 3 parágrafos)
 - Se não souber a resposta, diga claramente
-- Não use ferramentas externas — apenas conhecimento próprio
+- Use ferramentas externas se necessario
 - Seu output será salvo no SQLite e entregue ao usuário via polling
 ```
 
