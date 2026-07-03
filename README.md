@@ -228,7 +228,89 @@ Cliente ──POST /chat──▶ api.py ──enfileira──▶ RQ Queue ─�
 
 ---
 
-## 5. API Endpoints
+## 5. Configurar o Hermes Agent como Orchestrator + Subagent
+
+O Hermes Agent tem suporte nativo a **delegate_task** — o agent principal (orchestrator) pode delegar tarefas para subagents que rodam em contextos isolados.
+
+### 5.1 Criar o soul.md do Orchestrator
+
+O `soul.md` define a personalidade e regras do agent. Crie ou edite:
+
+```bash
+nano ~/soul.md
+```
+
+Conteúdo sugerido para o **orchestrator**:
+
+```markdown
+# Orchestrator — Lightsail Hermes API
+
+Você é o orchestrator da API Hermes no Lightsail. Suas funções:
+
+1. Receber queries dos usuários via API (POST /chat) ou Telegram
+2. Delegar tarefas complexas para subagents via delegate_task
+3. Gerenciar sessões e histórico no SQLite
+4. Responder com resultados consolidados
+
+Regras:
+- Nunca execute tarefas longas diretamente — delegue para subagents
+- Subagents rodam em contextos isolados com terminal próprio
+- Sempre retorne respostas em português
+- Mantenha o histórico da sessão para contexto
+```
+
+### 5.2 Criar o soul.md do Subagent
+
+O subagent (worker.py) executa `hermes chat` com um prompt montado. Para configurar a personalidade dele no Hermes:
+
+```bash
+# Cria um profile separado para o subagent
+hermes config set profile subagent
+hermes config set profile.subagent.soul_path ~/soul-subagent.md
+```
+
+Crie o `~/soul-subagent.md`:
+
+```markdown
+# Subagent — Worker de Processamento
+
+Você é um subagent especializado em responder queries de usuários.
+
+Regras:
+- Responda de forma direta e objetiva
+- Use português brasileiro
+- Mantenha respostas concisas (máx 3 parágrafos)
+- Se não souber a resposta, diga claramente
+- Não use ferramentas externas — apenas conhecimento próprio
+- Seu output será salvo no SQLite e entregue ao usuário via polling
+```
+
+### 5.3 Configurar o Hermes para usar delegate_task
+
+No `soul.md` do orchestrator, adicione a instrução de delegação:
+
+```markdown
+- Para queries que exigem raciocínio profundo, use:
+  delegate_task(goal="Responda: {query}", context="Histórico: {historico}")
+- Nunca processe queries longas diretamente — sempre delegue
+```
+
+### 5.4 Testar a delegação
+
+```bash
+# Pelo terminal do servidor
+hermes chat -q "Explique o que é uma LLM" -Q
+
+# Pela API
+curl -X POST http://localhost:5000/chat \
+  -H "X-API-Key: sua-chave" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Explique o que é uma LLM"}'
+```
+
+---
+
+## 6. API Endpoints
 
 | Método | Rota | Autenticação | Descrição |
 |--------|------|-------------|-----------|
@@ -257,7 +339,7 @@ curl -H "X-API-Key: sua-chave" http://<IP>:5000/jobs/<job_id>
 
 ---
 
-## 6. Systemd (produção)
+## 7. Systemd (produção)
 
 ```bash
 sudo tee /etc/systemd/system/hermes-api.service > /dev/null <<'EOF'
@@ -306,7 +388,7 @@ sudo systemctl start hermes-worker
 
 ---
 
-## 6. HTTPS com Caddy (produção)
+## 8. HTTPS com Caddy (produção)
 
 ```bash
 sudo apt install caddy -y
@@ -326,20 +408,7 @@ sudo systemctl restart caddy
 
 ---
 
-## Variáveis de Ambiente
-
-| Variável | Obrigatória | Padrão | Descrição |
-|----------|-------------|--------|-----------|
-| `PORT` | Não | 5000 | Porta do Flask |
-| `DEBUG` | Não | false | Modo debug |
-| `API_KEY` | **Sim** | dev-key-change-me | Chave para X-API-Key |
-| `REDIS_URL` | Não | redislite local | Redis URL para fila RQ |
-| `TELEGRAM_TOKEN` | **Sim** | — | Token do BotFather |
-| `MAX_TURNS` | Não | 50 | Máx turnos por sessão |
-
----
-
-## 6. Subagent: como funciona
+## 9. Subagent: como funciona
 
 O `worker.py` é um **subagent** que:
 
