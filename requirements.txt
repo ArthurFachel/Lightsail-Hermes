@@ -1,0 +1,9 @@
+flask>=2.0
+rq>=1.10
+redis>=4.0
+redislite>=0.1
+python-telegram-bot>=20.0
+flask-limiter>=3.0
+python-json-logger>=2.0
+Werkzeug>=2.0
+python-dotenv>=1.0
