@@ -1,6 +1,6 @@
 # Geo — Hermes Agent API com Subagent Worker
 
-API Flask que expõe o **Hermes Agent CLI** via HTTP e Telegram, com fila assíncrona RQ, persistência SQLite e arquitetura **orchestrator/subagent**.
+API Flask que expõe o **Hermes Agent CLI** via HTTP e Telegram, com fila assíncrona RQ, persistência em JSON e arquitetura **orchestrator/subagent**.
 
 ## Arquitetura
 
@@ -11,12 +11,12 @@ API Flask que expõe o **Hermes Agent CLI** via HTTP e Telegram, com fila assín
 │              │    GET /jobs/<id>   │   Flask + Redis   │                  │   hermes CLI     │
 └──────────────┘                     └──────────────────┘                  └──────────────────┘
                                               │                                       │
-                                              │  SQLite (sessoes)                     │ Executa hermes
+                                              │  JSON (sessoes)                          │ Executa hermes
                                               │  Telegram webhook                     │ chat -q "query"
                                               └───────────────────────────────────────┘
 ```
 
-**Orchestrator (api.py):** recebe as queries via HTTP ou Telegram, valida API key, gerencia sessões SQLite, enfileira jobs no Redis RQ.
+**Orchestrator (api.py):** recebe as queries via HTTP ou Telegram, valida API key, gerencia sessões em JSON, enfileira jobs no Redis RQ.
 
 **Subagent (worker.py):** consome a fila, executa `hermes chat -q "query"` em background, grava resposta no banco. O agent principal (api.py) nunca bloqueia — ele orquestra e o worker processa.
 
@@ -167,7 +167,7 @@ Verifique se funcionou:
 curl "https://api.telegram.org/bot<SEU_TOKEN>/getWebhookInfo"
 ```
 
-Agora o bot responde no Telegram. Cada chat_id vira uma sessão (`tg-<chat_id>`) persistente no SQLite.
+Agora o bot responde no Telegram. Cada chat_id vira uma sessão (`tg-<chat_id>`) persistente no JSON.
 
 ---
 
@@ -180,7 +180,7 @@ Agora o bot responde no Telegram. Cada chat_id vira uma sessão (`tg-<chat_id>`)
                     │         api.py (Orchestrator)        │
                     │                                     │
   POST /chat ──────▶│  1. Valida API key                  │
-                    │  2. Cria/recupera sessão SQLite      │
+                    │  2. Cria/recupera sessão JSON        │
                     │  3. Salva query do usuário           │
                     │  4. Enfileira job no Redis RQ        │
                     │  5. Retorna job_id + session_id       │
@@ -196,14 +196,14 @@ Agora o bot responde no Telegram. Cada chat_id vira uma sessão (`tg-<chat_id>`)
                     │  3. Executa:              │
                     │     hermes chat -q "..."  │
                     │  4. Salva resposta no     │
-                    │     SQLite                │
+                    │     JSON (sessions.json)  │
                     └──────────────────────────┘
 ```
 
 ### Orchestrator (api.py)
 
 - Recebe requisições HTTP (POST /chat) e webhooks Telegram
-- Valida API key, rate limit, gerencia sessões SQLite
+- Valida API key, rate limit, gerencia sessões em JSON
 - **Nunca executa o Hermes diretamente** — enfileira jobs no Redis RQ
 - Retorna `job_id` + `session_id` imediatamente (202 Accepted)
 - Cliente faz polling em `GET /jobs/<job_id>` até status `finished`
@@ -213,7 +213,7 @@ Agora o bot responde no Telegram. Cada chat_id vira uma sessão (`tg-<chat_id>`)
 - Consome a fila RQ em background
 - Monta o prompt com histórico da sessão
 - Executa `hermes chat -q "query"` via subprocess
-- Grava resposta no SQLite
+- Grava resposta no JSON (sessions.json)
 - Pode escalar horizontalmente: múltiplos workers consomem a mesma fila
 
 ### Fluxo completo
@@ -249,7 +249,7 @@ Você é o orchestrator da API Hermes no Lightsail. Suas funções:
 
 1. Receber queries dos usuários via API (POST /chat) ou Telegram
 2. Delegar tarefas complexas para subagents via delegate_task
-3. Gerenciar sessões e histórico no SQLite
+3. Gerenciar sessões e histórico no JSON (sessions.json)
 4. Responder com resultados consolidados
 
 Regras:
@@ -282,7 +282,7 @@ Regras:
 - Mantenha respostas concisas (máx 3 parágrafos)
 - Se não souber a resposta, diga claramente
 - Use ferramentas externas se necessario
-- Seu output será salvo no SQLite e entregue ao usuário via polling
+- Seu output será salvo no JSON (sessions.json) e entregue ao usuário via polling
 ```
 
 ### 5.3 Configurar o Hermes para usar delegate_task
@@ -415,7 +415,7 @@ O `worker.py` é um **subagent** que:
 1. **Escuta a fila RQ** — cada job é uma query de usuário
 2. **Monta o prompt** com o histórico da sessão (últimos N turnos)
 3. **Executa `hermes chat -q "query"`** via subprocess
-4. **Salva a resposta** no SQLite
+4. **Salva a resposta** no JSON (sessions.json)
 5. **Retorna o resultado** para o job (disponível via GET /jobs/<id>)
 
 O **orchestrator (api.py)** nunca bloqueia esperando o Hermes responder. Ele enfileira e devolve um `job_id` imediatamente. O cliente faz polling.
