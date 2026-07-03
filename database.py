@@ -1,80 +1,74 @@
-import sqlite3
+"""Persistencia de sessoes em JSON — substitui SQLite."""
 import json
-from contextlib import contextmanager
+import os
+import threading
 
-DATABASE_PATH = "./hermes_api.db"
+DB_PATH = "./sessions.json"
+_lock = threading.Lock()
 
-@contextmanager
-def get_db():
-    conn = sqlite3.connect(DATABASE_PATH)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
+
+def _load():
+    if not os.path.exists(DB_PATH):
+        return {}
+    with open(DB_PATH, "r") as f:
+        return json.load(f)
+
+
+def _save(data: dict):
+    with open(DB_PATH, "w") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
 
 def init_db():
-    with get_db() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS sessions (
-                session_id TEXT PRIMARY KEY,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                role TEXT CHECK(role IN ('user', 'assistant')) NOT NULL,
-                content TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-            )
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at)
-        """)
+    """Cria o arquivo JSON se nao existir."""
+    if not os.path.exists(DB_PATH):
+        _save({})
+
 
 def create_session(session_id: str):
-    with get_db() as conn:
-        conn.execute("INSERT OR IGNORE INTO sessions (session_id) VALUES (?)", (session_id,))
+    with _lock:
+        data = _load()
+        if session_id not in data:
+            data[session_id] = {"messages": []}
+            _save(data)
+
 
 def get_session_history(session_id: str):
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT role, content FROM messages WHERE session_id = ? ORDER BY created_at",
-            (session_id,)
-        ).fetchall()
-        return [{"role": r["role"], "content": r["content"]} for r in rows]
+    with _lock:
+        data = _load()
+        return data.get(session_id, {}).get("messages", [])
+
 
 def append_message(session_id: str, role: str, content: str):
-    with get_db() as conn:
-        conn.execute(
-            "INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)",
-            (session_id, role, content)
-        )
-        conn.execute(
-            "UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE session_id = ?",
-            (session_id,)
-        )
+    with _lock:
+        data = _load()
+        if session_id not in data:
+            data[session_id] = {"messages": []}
+        data[session_id]["messages"].append({"role": role, "content": content})
+        _save(data)
+
 
 def list_sessions():
-    with get_db() as conn:
-        rows = conn.execute("""
-            SELECT s.session_id, COUNT(m.id) as msg_count, MAX(m.created_at) as last_msg
-            FROM sessions s
-            LEFT JOIN messages m ON s.session_id = m.session_id
-            GROUP BY s.session_id
-        """).fetchall()
-        return [dict(r) for r in rows]
+    with _lock:
+        data = _load()
+        return [
+            {
+                "session_id": sid,
+                "msg_count": len(s["messages"]),
+                "last_msg": s["messages"][-1]["content"][:80] if s["messages"] else None,
+            }
+            for sid, s in data.items()
+        ]
+
 
 def delete_session(session_id: str):
-    with get_db() as conn:
-        conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+    with _lock:
+        data = _load()
+        data.pop(session_id, None)
+        _save(data)
+
 
 def session_exists(session_id: str) -> bool:
-    with get_db() as conn:
-        row = conn.execute("SELECT 1 FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
-        return row is not None
+    with _lock:
+        data = _load()
+        return session_id in data
